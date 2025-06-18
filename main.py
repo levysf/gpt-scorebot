@@ -45,4 +45,5 @@ def write_back(contact_id, score, action, today):
     }
     requests.patch(
         f"https://api.realnex.com/api/investors/{contact_id}",
-        headers={"Au
+        headers={"Authorization": f"Bearer {REALNEX_API_KEY}"}
+
