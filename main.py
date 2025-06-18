@@ -9,44 +9,43 @@ REALNEX_API_KEY = os.getenv("REALNEX_API_KEY")
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 TO_EMAIL = "joe@levysf.com"
 FROM_EMAIL = "Joe's AI Assistant <aiassistant@levysf.com>"
+BASE_URL = "https://sync.realnex.com/api/v1/Crm"
 
 # === UTILS ===
 def get_contacts():
     res = requests.get(
-        "https://api.realnex.com/api/investors",
+        f"{BASE_URL}/contact",
         headers={"Authorization": f"Bearer {REALNEX_API_KEY}"},
         params={"limit": 1000}
     )
     return res.json()
 
-def get_history(contact_id):
+def get_notes(contact_key):
     res = requests.get(
-        f"https://api.realnex.com/api/history?contact_id={contact_id}",
+        f"{BASE_URL}/contact/{contact_key}/notes",
         headers={"Authorization": f"Bearer {REALNEX_API_KEY}"}
     )
     return res.json()
 
-def score_contact(contact, history_notes):
-    name = contact.get("name", "Unnamed")
-    if "1031" in history_notes.lower() or "sell" in history_notes.lower():
+def score_contact(contact, notes_text):
+    if "1031" in notes_text.lower() or "sell" in notes_text.lower():
         return 18, "Follow up this week"
-    if "not interested" in history_notes.lower() or "sold" in history_notes.lower():
+    if "not interested" in notes_text.lower() or "sold" in notes_text.lower():
         return 4, "Skip — not a lead"
     return 12, "Check in — potential interest"
 
-def write_back(contact_id, score, action, today):
+def write_back(contact_key, score, action, today):
     update_data = {
-        "investor_info": {
-            "user_3": str(score),
-            "user_4": action,
-            "user_8": today
-        }
+        "user_3": str(score),
+        "user_4": action,
+        "user_8": today
     }
-    requests.patch(
-        f"https://api.realnex.com/api/investors/{contact_id}",
+    res = requests.put(
+        f"{BASE_URL}/contact/{contact_key}/investor",
         headers={"Authorization": f"Bearer {REALNEX_API_KEY}"},
         json=update_data
     )
+    return res.status_code
 
 # === MAIN SCRIPT ===
 def main():
@@ -54,20 +53,36 @@ def main():
     contacts = get_contacts()
     top_leads = []
 
-    for c in contacts:
-        notes = get_history(c["id"])
-        note_text = " ".join([n.get("notes", "") for n in notes])
-        score, action = score_contact(c, note_text)
+    for contact in contacts:
+        key = contact.get("contactKey")
+        investor = contact.get("investor", {})
+        if not key or investor.get("user_8"):  # Skip if already scored
+            continue
 
-        # Skip if score < 10
+        notes = get_notes(key)
+        notes_text = " ".join(n.get("notes", "") for n in notes)
+
+        score, action = score_contact(contact, notes_text)
         if score < 10:
             continue
 
-        # Skip if already scored
-        if c.get("investor_info", {}).get("user_8"):
-            continue
+        write_back(key, score, action, today)
+        top_leads.append(f"{contact.get('name')} — {score} — {action}")
 
-        # Write back to RealNex
-        write_back(c["id"], score, action, today)
+    # Send Email
+    if top_leads:
+        send_summary_email(top_leads)
 
-        # Add to top leads for email
+def send_summary_email(leads):
+    sg = SendGridAPIClient(SENDGRID_API_KEY)
+    content = "\n".join(leads)
+    message = Mail(
+        from_email=FROM_EMAIL,
+        to_emails=TO_EMAIL,
+        subject="📈 Daily GPT Lead Scores",
+        plain_text_content=content
+    )
+    sg.send(message)
+
+if __name__ == "__main__":
+    main()
