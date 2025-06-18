@@ -1,0 +1,10 @@
+services:
+  - type: cron
+    name: gpt-scorebot
+    schedule: "@daily"
+    runtime: python
+    buildCommand: ""
+    startCommand: "python main.py"
+    envVars:
+      - key: SENDGRID_API_KEY
+        sync: false
