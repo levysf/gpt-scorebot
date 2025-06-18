@@ -71,4 +71,3 @@ def main():
         write_back(c["id"], score, action, today)
 
         # Add to top leads for email
-        c["i]()
