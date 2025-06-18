@@ -27,23 +27,6 @@ def get_history(contact_id):
     return res.json()
 
 def score_contact(contact, history_notes):
-    # GPT scoring logic — placeholder
     name = contact.get("name", "Unnamed")
     if "1031" in history_notes.lower() or "sell" in history_notes.lower():
-        return 18, "Follow up this week"
-    if "not interested" in history_notes.lower() or "sold" in history_notes.lower():
-        return 4, "Skip — not a lead"
-    return 12, "Check in — potential interest"
-
-def write_back(contact_id, score, action, today):
-    update_data = {
-        "investor_info": {
-            "user_3": str(score),
-            "user_4": action,
-            "user_8": today
-        }
-    }
-    requests.patch(
-        f"https://api.realnex.com/api/investors/{contact_id}",
-        headers={"Authorization": f"Bearer {REALNEX_API_KEY}"}
-
+        return
