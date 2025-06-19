@@ -9,35 +9,34 @@ REALNEX_API_KEY = os.getenv("REALNEX_API_KEY")
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 TO_EMAIL = "joe@levysf.com"
 FROM_EMAIL = "Joe's AI Assistant <aiassistant@levysf.com>"
-BASE_URL = "https://sync.realnex.com/api/v1/Crm"
+BASE_URL = "https://sync.realnex.com/api/v1"
 
 # === UTILS ===
+
 def get_contacts():
     res = requests.get(
-        f"{BASE_URL}/contact",
-        headers={"Authorization": f"Bearer {REALNEX_API_KEY}"},
-        params={"limit": 1000}
+        f"{BASE_URL}/CrmOData/Contacts",
+        headers={"Authorization": f"Bearer {REALNEX_API_KEY}"}
     )
-    print(f"Contact API status: {res.status_code}")
-    print(f"Contact API response: {res.text}")
+    if res.status_code != 200:
+        print("Contact API status:", res.status_code)
+        print("Contact API response:", res.text)
+        raise Exception("Failed to fetch contacts")
     try:
-        return res.json()
+        return res.json().get("value", [])
     except Exception as e:
-        print(f"Error parsing contact JSON: {e}")
+        print("Error parsing contact JSON:", e)
         raise
 
 def get_notes(contact_key):
     res = requests.get(
-        f"{BASE_URL}/contact/{contact_key}/notes",
+        f"{BASE_URL}/Crm/contact/{contact_key}/notes",
         headers={"Authorization": f"Bearer {REALNEX_API_KEY}"}
     )
-    print(f"Notes API status: {res.status_code}")
-    print(f"Notes API response: {res.text}")
-    try:
-        return res.json()
-    except Exception as e:
-        print(f"Error parsing notes JSON: {e}")
-        raise
+    if res.status_code != 200:
+        print(f"Notes fetch failed for {contact_key}: {res.status_code}")
+        return []
+    return res.json()
 
 def score_contact(contact, notes_text):
     if "1031" in notes_text.lower() or "sell" in notes_text.lower():
@@ -53,12 +52,10 @@ def write_back(contact_key, score, action, today):
         "user_8": today
     }
     res = requests.put(
-        f"{BASE_URL}/contact/{contact_key}/investor",
+        f"{BASE_URL}/Crm/contact/{contact_key}/investor",
         headers={"Authorization": f"Bearer {REALNEX_API_KEY}"},
         json=update_data
     )
-    print(f"Write-back status for {contact_key}: {res.status_code}")
-    print(f"Write-back response: {res.text}")
     return res.status_code
 
 def send_summary_email(leads):
@@ -70,51 +67,34 @@ def send_summary_email(leads):
         subject="📈 Daily GPT Lead Scores",
         plain_text_content=content
     )
-    print("Sending summary email...")
-    response = sg.send(message)
-    print(f"Email status: {response.status_code}")
-    print(f"Email body: {response.body}")
+    sg.send(message)
 
-# === MAIN SCRIPT ===
+# === MAIN ===
+
 def main():
     today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
-    try:
-        contacts = get_contacts()
-    except Exception as e:
-        print(f"Fatal error getting contacts: {e}")
-        return
-
+    contacts = get_contacts()
     top_leads = []
 
     for contact in contacts:
-        key = contact.get("contactKey")
+        contact_key = contact.get("contactKey")
         investor = contact.get("investor", {})
-        if not key or investor.get("user_8"):
-            continue
+        if not contact_key or investor.get("user_8"):
+            continue  # skip if already scored
 
-        try:
-            notes = get_notes(key)
-        except Exception as e:
-            print(f"Skipping {key} due to notes error: {e}")
-            continue
-
+        notes = get_notes(contact_key)
         notes_text = " ".join(n.get("notes", "") for n in notes)
         score, action = score_contact(contact, notes_text)
 
         if score < 10:
             continue
 
-        try:
-            write_back(key, score, action, today)
-            top_leads.append(f"{contact.get('name')} — {score} — {action}")
-        except Exception as e:
-            print(f"Write-back failed for {key}: {e}")
+        write_back(contact_key, score, action, today)
+        name = contact.get("fullName") or contact.get("firstName", "") + " " + contact.get("lastName", "")
+        top_leads.append(f"{name.strip()} — {score} — {action}")
 
     if top_leads:
-        try:
-            send_summary_email(top_leads)
-        except Exception as e:
-            print(f"Email sending failed: {e}")
+        send_summary_email(top_leads)
 
 if __name__ == "__main__":
     main()
