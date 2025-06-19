@@ -4,25 +4,22 @@ import os
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
-# === CONFIG ===
+# Load environment variables
 REALNEX_API_KEY = os.getenv("REALNEX_API_KEY")
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
-TO_EMAIL = "joe@levysf.com"
-FROM_EMAIL = "Joe's AI Assistant <aiassistant@levysf.com>"
-BASE_URL = "https://sync.realnex.com/api/v1"
+TO_EMAIL = os.getenv("TO_EMAIL", "joe@levysf.com")  # default fallback
 
-# === UTILS ===
+BASE_URL = "https://sync.realnex.com/api/v1/CrmOData"
 
 def get_contacts():
     res = requests.get(
-        f"{BASE_URL}/CrmOData/Contacts",
+        f"{BASE_URL}/Contacts",
         headers={
             "Authorization": f"Bearer {REALNEX_API_KEY}",
             "Accept": "application/json"
         },
         params={
-            "$top": 1000,
-            "$orderby": "name"
+            "$top": 100  # RealNex hard limit
         }
     )
     print("Contact API status:", res.status_code)
@@ -31,76 +28,59 @@ def get_contacts():
         raise Exception("Failed to fetch contacts")
     return res.json().get("value", [])
 
-def get_notes(contact_key):
-    res = requests.get(
-        f"{BASE_URL}/Crm/contact/{contact_key}/notes",
-        headers={"Authorization": f"Bearer {REALNEX_API_KEY}"}
+def score_contact(contact):
+    # Simple placeholder logic (can expand to ML/NLP-based)
+    score = 0
+    notes = contact.get("notes", "") or ""
+    if "1031" in notes or "exchange" in notes.lower():
+        score += 10
+    if "family" in notes.lower():
+        score += 5
+    if "selling" in notes.lower():
+        score += 5
+    return score
+
+def format_report(scored_contacts):
+    report_lines = []
+    for c in scored_contacts:
+        report_lines.append(
+            f"{c.get('name')} — Score: {c['score']} — Notes: {c.get('notes', '')[:50]}"
+        )
+    return "\n".join(report_lines)
+
+def send_email(subject, body):
+    message = Mail(
+        from_email="gpt@levysf.com",
+        to_emails=TO_EMAIL,
+        subject=subject,
+        plain_text_content=body
     )
-    if res.status_code != 200:
-        print(f"Failed to fetch notes for {contact_key}: {res.status_code}")
-        return []
-    return res.json()
-
-def score_contact(contact, notes_text):
-    if "1031" in notes_text.lower() or "sell" in notes_text.lower():
-        return 18, "Follow up this week"
-    if "not interested" in notes_text.lower() or "sold" in notes_text.lower():
-        return 4, "Skip — not a lead"
-    return 12, "Check in — potential interest"
-
-def write_back(contact_key, score, action, today):
-    update_data = {
-        "user_3": str(score),
-        "user_4": action,
-        "user_8": today
-    }
-    res = requests.put(
-        f"{BASE_URL}/Crm/contact/{contact_key}/investor",
-        headers={
-            "Authorization": f"Bearer {REALNEX_API_KEY}",
-            "Content-Type": "application/json"
-        },
-        json=update_data
-    )
-    print(f"Write-back for {contact_key}: {res.status_code}")
-    return res.status_code
-
-# === MAIN SCRIPT ===
+    try:
+        sg = SendGridAPIClient(SENDGRID_API_KEY)
+        response = sg.send(message)
+        print("Email sent. Status code:", response.status_code)
+    except Exception as e:
+        print("Error sending email:", str(e))
 
 def main():
     today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
     contacts = get_contacts()
-    top_leads = []
+    print(f"Retrieved {len(contacts)} contacts")
 
-    for contact in contacts:
-        key = contact.get("key") or contact.get("contactKey")
-        investor = contact.get("investor", {})
-        if not key or investor.get("user_8"):  # Skip if already scored
-            continue
+    scored = []
+    for c in contacts:
+        score = score_contact(c)
+        if score > 0:
+            c["score"] = score
+            scored.append(c)
 
-        notes = get_notes(key)
-        notes_text = " ".join(n.get("notes", "") for n in notes)
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    report = format_report(scored[:20])
 
-        score, action = score_contact(contact, notes_text)
-        if score < 10:
-            continue
-
-        write_back(key, score, action, today)
-        top_leads.append(f"{contact.get('name')} — {score} — {action}")
-
-    if top_leads:
-        send_summary_email(top_leads)
-
-def send_summary_email(leads):
-    sg = SendGridAPIClient(SENDGRID_API_KEY)
-    content = "\n".join(leads)
-    message = Mail(
-        from_email=FROM_EMAIL,
-        to_emails=TO_EMAIL,
-        subject="📈 Daily GPT Lead Scores",
-        plain_text_content=content
+    send_email(
+        subject=f"GPT Contact Scoring Report – {today}",
+        body=report or "No high-score contacts found."
     )
-    sg.send(message)
 
 if __name__ == "__main__":
     main()
