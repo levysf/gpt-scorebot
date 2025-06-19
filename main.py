@@ -18,14 +18,26 @@ def get_contacts():
         headers={"Authorization": f"Bearer {REALNEX_API_KEY}"},
         params={"limit": 1000}
     )
-    return res.json()
+    print(f"Contact API status: {res.status_code}")
+    print(f"Contact API response: {res.text}")
+    try:
+        return res.json()
+    except Exception as e:
+        print(f"Error parsing contact JSON: {e}")
+        raise
 
 def get_notes(contact_key):
     res = requests.get(
         f"{BASE_URL}/contact/{contact_key}/notes",
         headers={"Authorization": f"Bearer {REALNEX_API_KEY}"}
     )
-    return res.json()
+    print(f"Notes API status: {res.status_code}")
+    print(f"Notes API response: {res.text}")
+    try:
+        return res.json()
+    except Exception as e:
+        print(f"Error parsing notes JSON: {e}")
+        raise
 
 def score_contact(contact, notes_text):
     if "1031" in notes_text.lower() or "sell" in notes_text.lower():
@@ -45,33 +57,9 @@ def write_back(contact_key, score, action, today):
         headers={"Authorization": f"Bearer {REALNEX_API_KEY}"},
         json=update_data
     )
+    print(f"Write-back status for {contact_key}: {res.status_code}")
+    print(f"Write-back response: {res.text}")
     return res.status_code
-
-# === MAIN SCRIPT ===
-def main():
-    today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
-    contacts = get_contacts()
-    top_leads = []
-
-    for contact in contacts:
-        key = contact.get("contactKey")
-        investor = contact.get("investor", {})
-        if not key or investor.get("user_8"):  # Skip if already scored
-            continue
-
-        notes = get_notes(key)
-        notes_text = " ".join(n.get("notes", "") for n in notes)
-
-        score, action = score_contact(contact, notes_text)
-        if score < 10:
-            continue
-
-        write_back(key, score, action, today)
-        top_leads.append(f"{contact.get('name')} — {score} — {action}")
-
-    # Send Email
-    if top_leads:
-        send_summary_email(top_leads)
 
 def send_summary_email(leads):
     sg = SendGridAPIClient(SENDGRID_API_KEY)
@@ -82,7 +70,51 @@ def send_summary_email(leads):
         subject="📈 Daily GPT Lead Scores",
         plain_text_content=content
     )
-    sg.send(message)
+    print("Sending summary email...")
+    response = sg.send(message)
+    print(f"Email status: {response.status_code}")
+    print(f"Email body: {response.body}")
+
+# === MAIN SCRIPT ===
+def main():
+    today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+    try:
+        contacts = get_contacts()
+    except Exception as e:
+        print(f"Fatal error getting contacts: {e}")
+        return
+
+    top_leads = []
+
+    for contact in contacts:
+        key = contact.get("contactKey")
+        investor = contact.get("investor", {})
+        if not key or investor.get("user_8"):
+            continue
+
+        try:
+            notes = get_notes(key)
+        except Exception as e:
+            print(f"Skipping {key} due to notes error: {e}")
+            continue
+
+        notes_text = " ".join(n.get("notes", "") for n in notes)
+        score, action = score_contact(contact, notes_text)
+
+        if score < 10:
+            continue
+
+        try:
+            write_back(key, score, action, today)
+            top_leads.append(f"{contact.get('name')} — {score} — {action}")
+        except Exception as e:
+            print(f"Write-back failed for {key}: {e}")
+
+    if top_leads:
+        try:
+            send_summary_email(top_leads)
+        except Exception as e:
+            print(f"Email sending failed: {e}")
 
 if __name__ == "__main__":
     main()
